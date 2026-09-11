@@ -2,6 +2,9 @@
 > **VeloHack 2K26 — Open Innovation / ISRO**  
 > *“Ask the ocean. Let specialized agents find the signal.”*
 
+🔗 **Live Deployment:** [https://sweetyvincent.github.io/ORCA/](https://sweetyvincent.github.io/ORCA/)  
+📦 **GitHub Repository:** [https://github.com/sweetyvincent/ORCA](https://github.com/sweetyvincent/ORCA)
+
 ---
 
 ## 🌊 Overview
