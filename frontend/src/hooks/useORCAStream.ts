@@ -47,21 +47,21 @@ export function useORCAStream() {
     }
 
     // Reset state for new run
-    setState({
+    setState((prev) => ({
+      ...prev,
       isStreaming: true,
       question,
-      location: null,
-      routerDecision: null,
-      sstResult: null,
-      chlorophyllResult: null,
-      advisoryResult: null,
+      // Retain previous stream telemetry as visual baseline until new stream events arrive
+      sstResult: prev.sstResult,
+      chlorophyllResult: prev.chlorophyllResult,
+      advisoryResult: prev.advisoryResult,
       habAssessment: null,
       synthesisResult: null,
       traceSteps: INITIAL_STEPS.map((s) =>
         s.id === "query" ? { ...s, status: "running", subtitle: `"${question}"` } : { ...s, status: "queued" }
       ),
       error: null,
-    });
+    }));
 
     const abort = streamORCAQuery(question, {
       onEvent: (ev: StreamEvent) => {

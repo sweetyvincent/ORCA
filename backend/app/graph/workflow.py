@@ -14,14 +14,9 @@ from backend.app.graph.nodes import (
 
 def route_specialists(state: AgentState) -> List[str]:
     """Conditional edge router determining which specialist nodes execute."""
-    decision = state.get("router_decision")
-    if not decision or not decision.agents:
-        return ["sst", "chlorophyll"]
-    
-    # Valid specialist node targets
-    valid_targets = {"sst", "chlorophyll", "advisory"}
-    selected = [a for a in decision.agents if a in valid_targets]
-    return selected if selected else ["sst"]
+    # Always dispatch SST, Chlorophyll, and Advisory to ensure workbench graphs
+    # (Stream Alpha, Stream Beta, Stream Gamma) always receive fresh telemetry for the sector.
+    return ["sst", "chlorophyll", "advisory"]
 
 def create_orca_graph():
     """Builds and compiles the ORCA multi-agent LangGraph state machine."""

@@ -454,11 +454,9 @@ export function executeClientORCAPipeline(
     { delay: 50, event: { type: "query_received", data: { question } } },
     { delay: 250, event: { type: "location_resolved", node: "resolve_location", data: location } },
     { delay: 550, event: { type: "router_completed", node: "router", data: routerDecision } },
-    { delay: 900, event: { type: "agent_completed", node: "sst", data: sstResult } },
-    { delay: 1250, event: { type: "agent_completed", node: "chlorophyll", data: chlorophyllResult } },
-    ...(agents.includes("advisory")
-      ? [{ delay: 1500, event: { type: "agent_completed", node: "advisory", data: advisoryResult } }]
-      : []),
+    { delay: 850, event: { type: "agent_completed", node: "sst", data: sstResult } },
+    { delay: 1150, event: { type: "agent_completed", node: "chlorophyll", data: chlorophyllResult } },
+    { delay: 1450, event: { type: "agent_completed", node: "advisory", data: advisoryResult } },
     { delay: 1800, event: { type: "reasoning_completed", node: "hab_reasoning", data: habAssessment } },
     { delay: 2100, event: { type: "synthesis_completed", node: "synthesizer", data: synthesisResult } },
     {

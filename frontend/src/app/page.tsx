@@ -21,12 +21,12 @@ export default function ORCAMissionControl() {
 
   const { state, submitQuestion } = useORCAStream();
 
-  // If demo mode is enabled and no query has run, automatically run California HAB query
+  // Automatically initialize first sector telemetry on mount so Stream Alpha, Beta, Gamma graphs are populated immediately
   useEffect(() => {
-    if (demoMode && !state.question && !state.isStreaming) {
+    if (!state.question && !state.isStreaming) {
       submitQuestion("Will conditions favour a harmful algal bloom near California next week?");
     }
-  }, [demoMode, state.question, state.isStreaming, submitQuestion]);
+  }, [submitQuestion]);
 
   const handleSelectSector = (sectorName: string, query: string) => {
     submitQuestion(query);
