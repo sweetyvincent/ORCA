@@ -1,5 +1,7 @@
 import httpx
 import numpy as np
+import pandas as pd
+import xarray as xr
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 from scipy import stats
@@ -127,34 +129,36 @@ class NOAAOISSTProvider(MarineDataProvider):
         raw_req: str,
         accessed_at: str
     ) -> SSTResult:
-        # Group by timestamp: { timestamp: { 'sst': [], 'anom': [] } }
-        time_map: Dict[str, Dict[str, List[float]]] = {}
-        for r in rows:
-            # row: [time, zlev, lat, lon, sst, anom]
-            t, _, _, _, sst, anom = r[0], r[1], r[2], r[3], r[4], r[5]
-            if t not in time_map:
-                time_map[t] = {"sst": [], "anom": []}
-            if sst is not None:
-                time_map[t]["sst"].append(float(sst))
-            if anom is not None:
-                time_map[t]["anom"].append(float(anom))
+        # Ingest gridded rows into a multidimensional xarray.Dataset (time x latitude x longitude)
+        df = pd.DataFrame(rows, columns=["time", "zlev", "latitude", "longitude", "sst", "anom"])
+        df["sst"] = pd.to_numeric(df["sst"], errors="coerce")
+        df["anom"] = pd.to_numeric(df["anom"], errors="coerce")
+        
+        # Build multidimensional xarray Dataset
+        ds = df.set_index(["time", "latitude", "longitude"])[["sst", "anom"]].to_xarray()
+        
+        # Spatial reduction using xarray across latitude and longitude dimensions
+        spatial_means = ds.mean(dim=["latitude", "longitude"], skipna=True)
+        sorted_times = list(spatial_means.coords["time"].values)
 
-        sorted_times = sorted(time_map.keys())
         time_series: List[SSTObservationPoint] = []
         sst_daily_means: List[float] = []
         anom_daily_means: List[float] = []
 
         for t in sorted_times:
-            ssts = time_map[t]["sst"]
-            anoms = time_map[t]["anom"]
-            mean_sst = round(float(np.mean(ssts)), 2) if ssts else None
-            mean_anom = round(float(np.mean(anoms)), 2) if anoms else None
+            sst_val = float(spatial_means["sst"].sel(time=t).values)
+            anom_val = float(spatial_means["anom"].sel(time=t).values)
+            
+            mean_sst = round(sst_val, 2) if not np.isnan(sst_val) else None
+            mean_anom = round(anom_val, 2) if not np.isnan(anom_val) else None
+            
             if mean_sst is not None:
                 sst_daily_means.append(mean_sst)
             if mean_anom is not None:
                 anom_daily_means.append(mean_anom)
+                
             time_series.append(SSTObservationPoint(
-                timestamp=t,
+                timestamp=str(t),
                 sst_c=mean_sst,
                 anom_c=mean_anom
             ))
