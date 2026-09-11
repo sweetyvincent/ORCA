@@ -1,5 +1,4 @@
 # ORCA — AI Multi-Agent Marine Intelligence System
-> **VeloHack 2K26 — Open Innovation / ISRO**  
 > *“Ask the ocean. Let specialized agents find the signal.”*
 
 🔗 **Live Deployment:** [https://sweetyvincent.github.io/ORCA/](https://sweetyvincent.github.io/ORCA/)  
@@ -183,5 +182,4 @@ python -m pytest backend/tests/ -v
 ---
 
 ## 👥 Contributors & Acknowledgements
-- **Team ORCA** — VeloHack 2K26 / Open Innovation / ISRO
 - Data telemetry provided by **NOAA CoastWatch**, **NCEI**, **NASA Ocean Biology Processing Group**, and **Copernicus Marine Service**.
