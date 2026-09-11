@@ -2,14 +2,15 @@ import json
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import AsyncGenerator, Dict, Any
+from sse_starlette.sse import ServerSentEvent
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 from backend.app.graph.workflow import orca_graph
 from backend.app.models.schemas import AskRequest, StreamEvent
 
-def create_event(event_type: str, node: str = None, data: Any = None) -> str:
-    """Formats an SSE message string with IST timestamp."""
+def create_event(event_type: str, node: str = None, data: Any = None) -> ServerSentEvent:
+    """Formats a clean ServerSentEvent with IST timestamp."""
     payload = StreamEvent(
         type=event_type,
         node=node,
@@ -18,9 +19,9 @@ def create_event(event_type: str, node: str = None, data: Any = None) -> str:
     )
     # Ensure serializable format
     data_json = json.dumps(payload.model_dump(mode="json"))
-    return f"event: {event_type}\ndata: {data_json}\n\n"
+    return ServerSentEvent(data=data_json, event=event_type)
 
-async def stream_orca_pipeline(req: AskRequest) -> AsyncGenerator[str, None]:
+async def stream_orca_pipeline(req: AskRequest) -> AsyncGenerator[ServerSentEvent, None]:
     """
     Executes the LangGraph marine intelligence pipeline and streams live execution
     events over Server-Sent Events (SSE).

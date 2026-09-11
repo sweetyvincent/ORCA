@@ -109,8 +109,9 @@ export function streamORCAQuery(
           let dataStr = "";
 
           for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              dataStr = line.replace("data: ", "").trim();
+            const trimmed = line.trim();
+            if (trimmed.startsWith("data:")) {
+              dataStr = trimmed.replace(/^(data:\s*)+/, "").trim();
             }
           }
 
