@@ -205,16 +205,18 @@ Format response as a JSON object with keys:
             combined_reasoning = f"Thermal specialist confirms {sst.trend.direction} conditions at {sst.latest.value_c}°C ({sst.anomaly.value_c:+.2f}°C anomaly) with slope {sst.trend.slope_c_per_day:+.3f}°C/day."
 
         elif has_chl_q and not has_sst_q and not has_hab_q and not has_adv_q and chlorophyll and chlorophyll.latest:
-            favourability_headline = f"Chlorophyll-a Telemetry: {chlorophyll.latest.chlorophyll_mg_m3} mg/m³ ({chlorophyll.baseline_comparison.relative_status.upper()})"
+            chl_pct = int(chlorophyll.baseline_comparison.percentile_estimate) if (chlorophyll.baseline_comparison and chlorophyll.baseline_comparison.percentile_estimate) else 50
+            chl_status = chlorophyll.baseline_comparison.relative_status if chlorophyll.baseline_comparison else "baseline"
+            favourability_headline = f"Chlorophyll-a Telemetry: {chlorophyll.latest.chlorophyll_mg_m3} mg/m³ ({chl_status.upper()})"
             summary = (
                 f"In response to your inquiry regarding ocean colour and chlorophyll biomass for {location.location_name}: "
                 f"Copernicus / NOAA VIIRS DINEOF satellite observations measure near-surface chlorophyll-a concentration at "
-                f"{chlorophyll.latest.chlorophyll_mg_m3} mg/m³. This concentration ranks in the {chlorophyll.baseline_comparison.percentile}th "
-                f"percentile of the regional seasonal distribution ({chlorophyll.baseline_comparison.relative_status} relative status). "
+                f"{chlorophyll.latest.chlorophyll_mg_m3} mg/m³. This concentration ranks in the {chl_pct}th "
+                f"percentile of the regional seasonal distribution ({chl_status} relative status). "
                 f"DINEOF spatio-temporal gap-filling successfully reconstructed cloud-obscured pixels with {chlorophyll.data_quality.valid_obs_pct}% observation validity. "
                 f"Current biological biomass indicates {'high phytoplankton productivity' if chlorophyll.latest.chlorophyll_mg_m3 > 2.0 else 'moderate baseline primary productivity'}."
             )
-            combined_reasoning = f"Chlorophyll specialist confirms {chlorophyll.latest.chlorophyll_mg_m3} mg/m³ ({chlorophyll.baseline_comparison.percentile}th percentile) via VIIRS DINEOF."
+            combined_reasoning = f"Chlorophyll specialist confirms {chlorophyll.latest.chlorophyll_mg_m3} mg/m³ ({chl_pct}th percentile) via VIIRS DINEOF."
 
         elif has_adv_q and not has_hab_q and not has_sst_q and not has_chl_q:
             has_advisories = bool(advisory and advisory.active_advisories)
