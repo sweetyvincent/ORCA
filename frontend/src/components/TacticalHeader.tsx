@@ -18,12 +18,20 @@ export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
   setDemoMode,
   onOpenProvenance,
 }) => {
-  const [utcTime, setUtcTime] = useState<string>("");
+  const [istTime, setIstTime] = useState<string>("");
 
   useEffect(() => {
     const update = () => {
       const now = new Date();
-      setUtcTime(now.toUTCString().slice(17, 25) + " UTC");
+      // Format time in Indian Standard Time (IST: Asia/Kolkata, UTC+05:30)
+      const istStr = now.toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      setIstTime(istStr + " IST");
     };
     update();
     const interval = setInterval(update, 1000);
@@ -84,7 +92,7 @@ export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
 
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#051426] border border-ocean-800 text-slate-300">
           <Clock className="w-3.5 h-3.5 text-bioglow-cyan" />
-          <span className="text-[11px] font-bold text-slate-200">{utcTime || "UTC MISSION"}</span>
+          <span className="text-[11px] font-bold text-slate-200">{istTime || "IST MISSION"}</span>
         </div>
       </div>
 

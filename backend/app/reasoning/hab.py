@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 from backend.app.models.schemas import (
     SSTResult,
     ChlorophyllResult,
@@ -200,7 +202,7 @@ class HABReasoningEngine:
             factors=factors,
             regional_context=regional_context,
             limitations=limitations,
-            computed_at=datetime.utcnow().isoformat() + "Z"
+            computed_at=datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
         )
 
 hab_reasoning_engine = HABReasoningEngine()

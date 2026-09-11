@@ -122,7 +122,7 @@ export const TacticalConsole: React.FC<TacticalConsoleProps> = ({
               <div className="flex-1">
                 <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
                   <span className="font-bold text-bioglow-cyan uppercase">OPERATOR INQUIRY</span>
-                  <span>{new Date().toLocaleTimeString()} UTC</span>
+                  <span>{new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST</span>
                 </div>
                 <p className="text-sm font-semibold text-white font-sans tracking-wide">
                   "{currentQuery}"

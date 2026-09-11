@@ -1,6 +1,8 @@
 from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 class RegionBbox(BaseModel):
     min_lat: float
@@ -156,4 +158,4 @@ class StreamEvent(BaseModel):
     type: str
     node: Optional[str] = None
     data: Any = None
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30"))

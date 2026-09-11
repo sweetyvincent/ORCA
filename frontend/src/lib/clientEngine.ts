@@ -155,8 +155,11 @@ export function executeClientORCAPipeline(
   }
   const reg = COASTAL_REGIONS[locKey];
   const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10);
-  const nowIso = now.toISOString();
+  // Indian Standard Time (IST: UTC+5:30)
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istDate = new Date(now.getTime() + istOffsetMs);
+  const dateStr = istDate.toISOString().slice(0, 10);
+  const nowIso = istDate.toISOString().replace("Z", "+05:30");
 
   const location: LocationResolved = {
     location_name: reg.name,
@@ -201,12 +204,12 @@ export function executeClientORCAPipeline(
     needs_advisory: agents.includes("advisory"),
   };
 
-  // 3. Generate 7-Day Observation Time Series
+  // 3. Generate 7-Day Observation Time Series (IST)
   const sstSeries = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(Date.now() - (6 - i) * 86400000);
     const dayOffset = (i - 3) * (reg.sst_slope || 0.04);
     return {
-      timestamp: d.toISOString().slice(0, 10) + "T12:00:00Z",
+      timestamp: d.toISOString().slice(0, 10) + "T12:00:00+05:30",
       sst_c: Math.round((reg.sst_val - (6 - i) * (reg.sst_slope || 0.04)) * 100) / 100,
       anom_c: Math.round((reg.sst_anom + dayOffset * 0.4) * 100) / 100,
     };
@@ -216,7 +219,7 @@ export function executeClientORCAPipeline(
     const d = new Date(Date.now() - (6 - i) * 86400000);
     const isCloud = i === 2; // day 3 cloud gap
     return {
-      timestamp: d.toISOString().slice(0, 10) + "T12:00:00Z",
+      timestamp: d.toISOString().slice(0, 10) + "T12:00:00+05:30",
       chlorophyll_mg_m3: isCloud ? null : Math.round((reg.chla_val - (6 - i) * 0.05) * 100) / 100,
       is_missing_or_cloud: isCloud,
     };
@@ -228,7 +231,7 @@ export function executeClientORCAPipeline(
     location: { name: reg.name, lat: reg.lat, lon: reg.lon },
     latest: {
       value_c: reg.sst_val,
-      timestamp: dateStr + "T12:00:00Z",
+      timestamp: dateStr + "T12:00:00+05:30",
     },
     trend: {
       period_days: 7,
@@ -258,7 +261,7 @@ export function executeClientORCAPipeline(
     location: { name: reg.name, lat: reg.lat, lon: reg.lon },
     latest: {
       chlorophyll_mg_m3: reg.chla_val,
-      timestamp: dateStr + "T12:00:00Z",
+      timestamp: dateStr + "T12:00:00+05:30",
     },
     trend: {
       period_days: 7,
@@ -424,13 +427,13 @@ export function executeClientORCAPipeline(
         name: "SST Specialist",
         provider: "NOAA / NCEI CoastWatch",
         dataset: "OISST v2.1 AVHRR Daily Gridded (xarray)",
-        timestamp: dateStr + "T12:00:00Z",
+        timestamp: dateStr + "T12:00:00+05:30",
       },
       {
         name: "Chlorophyll Specialist",
         provider: "Copernicus Marine / NOAA CoastWatch",
         dataset: "VIIRS NOAA-20 DINEOF Gap-Filled NRT",
-        timestamp: dateStr + "T12:00:00Z",
+        timestamp: dateStr + "T12:00:00+05:30",
       },
       ...(reg.advisory
         ? [

@@ -1,7 +1,9 @@
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 from backend.app.config import settings
 from backend.app.models.schemas import (
@@ -29,7 +31,7 @@ class SynthesizerAgent:
         advisory: Optional[AdvisoryResult] = None,
         hab: Optional[HABAssessment] = None
     ) -> SynthesisResult:
-        now_str = datetime.utcnow().isoformat() + "Z"
+        now_str = datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
         
         # Check if Claude API key is configured
         if settings.ANTHROPIC_API_KEY:

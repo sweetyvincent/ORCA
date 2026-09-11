@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 from backend.app.models.schemas import (
     LocationResolved,
     AdvisoryResult,
@@ -68,7 +70,7 @@ class CoastalAdvisoryProvider:
     ]
 
     async def fetch(self, location: LocationResolved) -> AdvisoryResult:
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        now_iso = datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
         loc_name = location.location_name.lower()
         lat = location.latitude
         lon = location.longitude

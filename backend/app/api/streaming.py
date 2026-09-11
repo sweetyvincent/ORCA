@@ -1,18 +1,20 @@
 import json
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import AsyncGenerator, Dict, Any
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 from backend.app.graph.workflow import orca_graph
 from backend.app.models.schemas import AskRequest, StreamEvent
 
 def create_event(event_type: str, node: str = None, data: Any = None) -> str:
-    """Formats an SSE message string."""
+    """Formats an SSE message string with IST timestamp."""
     payload = StreamEvent(
         type=event_type,
         node=node,
         data=data,
-        timestamp=datetime.utcnow().isoformat() + "Z"
+        timestamp=datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
     )
     # Ensure serializable format
     data_json = json.dumps(payload.model_dump(mode="json"))
@@ -105,7 +107,7 @@ async def stream_orca_pipeline(req: AskRequest) -> AsyncGenerator[str, None]:
             "advisory_result": accumulated_state.get("advisory_result").model_dump(mode="json") if accumulated_state.get("advisory_result") else None,
             "hab_assessment": accumulated_state.get("hab_assessment").model_dump(mode="json") if accumulated_state.get("hab_assessment") else None,
             "synthesis_result": accumulated_state.get("synthesis_result").model_dump(mode="json") if accumulated_state.get("synthesis_result") else None,
-            "completed_at": datetime.utcnow().isoformat() + "Z"
+            "completed_at": datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
         }
         yield create_event("final", data=final_payload)
 

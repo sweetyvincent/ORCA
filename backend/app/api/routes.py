@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Request, HTTPException
 from sse_starlette.sse import EventSourceResponse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 from backend.app.models.schemas import AskRequest
 from backend.app.api.streaming import stream_orca_pipeline
@@ -15,7 +17,7 @@ async def health_check():
         "service": "ORCA - Marine Intelligence System",
         "version": settings.VERSION,
         "environment": settings.ENVIRONMENT,
-        "timestamp": datetime.utcnow().isoformat() + "Z"
+        "timestamp": datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
     }
 
 @api_router.get("/data-status")
@@ -51,7 +53,7 @@ async def data_status():
                 "operational": True
             }
         ],
-        "checked_at": datetime.utcnow().isoformat() + "Z"
+        "checked_at": datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
     }
 
 @api_router.get("/sources")
