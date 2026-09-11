@@ -57,9 +57,9 @@ export default function ORCAMissionControl() {
 
         {/* Dual-Column Strategic Mission Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-          {/* LEFT STRATEGIC SECTOR: 3D Geospatial Globe & Heterogeneous Data Streams */}
+          {/* LEFT STRATEGIC SECTOR: 3D Ocean Surface Simulator & Heterogeneous Data Streams */}
           <div className="lg:col-span-7 flex flex-col gap-4">
-            {/* 3D Earth Ocean Telemetry Globe */}
+            {/* 3D Ocean Surface Simulator (Waves, SST Thermal Isotherms, Algal Bloom Density) */}
             <div className="h-[390px] lg:h-[440px] w-full">
               <OceanGlobe
                 location={state.location}

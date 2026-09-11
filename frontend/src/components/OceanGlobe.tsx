@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { LocationResolved, SSTResult, ChlorophyllResult } from "../lib/types";
-import { Compass } from "lucide-react";
+import { Waves, Thermometer, Sparkles, Activity, Eye, Compass } from "lucide-react";
 
 interface OceanGlobeProps {
   location: LocationResolved | null;
@@ -12,6 +12,8 @@ interface OceanGlobeProps {
   presentationMode?: boolean;
 }
 
+type VisualLayer = "composite" | "sst" | "algae" | "waves";
+
 export const OceanGlobe: React.FC<OceanGlobeProps> = ({
   location,
   sstResult,
@@ -19,198 +21,426 @@ export const OceanGlobe: React.FC<OceanGlobeProps> = ({
   presentationMode: _unusedPresentationMode = false,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
-  const [activeLayer, setActiveLayer] = useState<"composite" | "sst" | "chlorophyll">("composite");
-  const sceneRef = useRef<{
+  const [activeLayer, setActiveLayer] = useState<VisualLayer>("composite");
+  const [waveHeightScale, setWaveHeightScale] = useState<number>(1.0);
+  const [hoverData, setHoverData] = useState<{
+    x: number;
+    y: number;
+    temp: number;
+    chla: number;
+    waveH: number;
+    visible: boolean;
+  }>({ x: 0, y: 0, temp: 16.5, chla: 2.8, waveH: 1.4, visible: false });
+
+  // Base values from props or realistic marine defaults
+  const baseSST = sstResult?.latest?.value_c ?? 17.8;
+  const baseChl = chlorophyllResult?.latest?.chlorophyll_mg_m3 ?? 3.4;
+  const targetName = location?.location_name ?? "Coastal Marine Observatory";
+
+  const sceneRefs = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
     renderer: THREE.WebGLRenderer;
-    globeGroup: THREE.Group;
-    targetMarker: THREE.Mesh;
-    scanRing: THREE.Mesh;
-    targetRotation: { x: number; y: number };
-    currentRotation: { x: number; y: number };
+    oceanMesh: THREE.Mesh;
+    oceanMaterial: THREE.ShaderMaterial;
+    particleSystem: THREE.Points;
+    buoyGroup: THREE.Group;
+    sonarMarker: THREE.Mesh;
+    raycaster: THREE.Raycaster;
+    mouse: THREE.Vector2;
+    controls: {
+      isDragging: boolean;
+      prevX: number;
+      prevY: number;
+      rotX: number;
+      rotY: number;
+      targetRotX: number;
+      targetRotY: number;
+      zoom: number;
+    };
   } | null>(null);
+
+  // Sync layer changes into shader uniforms
+  useEffect(() => {
+    if (sceneRefs.current?.oceanMaterial) {
+      let layerCode = 0; // composite
+      if (activeLayer === "sst") layerCode = 1;
+      if (activeLayer === "algae") layerCode = 2;
+      if (activeLayer === "waves") layerCode = 3;
+      sceneRefs.current.oceanMaterial.uniforms.uLayer.value = layerCode;
+    }
+  }, [activeLayer]);
+
+  // Sync SST & Chl-a updates into uniforms
+  useEffect(() => {
+    if (sceneRefs.current?.oceanMaterial) {
+      sceneRefs.current.oceanMaterial.uniforms.uBaseSST.value = baseSST;
+      sceneRefs.current.oceanMaterial.uniforms.uBaseChl.value = baseChl;
+    }
+  }, [baseSST, baseChl]);
+
+  // Sync wave height scale
+  useEffect(() => {
+    if (sceneRefs.current?.oceanMaterial) {
+      sceneRefs.current.oceanMaterial.uniforms.uWaveHeight.value = 4.2 * waveHeightScale;
+    }
+  }, [waveHeightScale]);
 
   useEffect(() => {
     if (!mountRef.current) return;
-    const width = mountRef.current.clientWidth;
-    const height = mountRef.current.clientHeight;
+    const container = mountRef.current;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
 
-    // Scene
+    // 1. Scene & Fog Setup (Deep Abyssal Blue)
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x02060b, 0.002);
+    scene.fog = new THREE.FogExp2(0x020813, 0.0035);
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.z = 240;
+    // 2. Camera Setup
+    const camera = new THREE.PerspectiveCamera(48, width / height, 0.5, 1200);
+    camera.position.set(0, 75, 140);
+    camera.lookAt(0, -10, 0);
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+    // 3. High-Performance WebGL Renderer
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: "high-performance",
+    });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    mountRef.current.appendChild(renderer.domElement);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    container.appendChild(renderer.domElement);
 
-    const globeGroup = new THREE.Group();
-    scene.add(globeGroup);
+    // 4. Custom Gerstner Ocean Wave + SST Thermal + Algal Bloom Shader
+    const oceanGeo = new THREE.PlaneGeometry(280, 280, 180, 180);
+    oceanGeo.rotateX(-Math.PI / 2);
 
-    // 1. Earth Ocean Sphere
-    const sphereRadius = 75;
-    const sphereGeo = new THREE.SphereGeometry(sphereRadius, 64, 64);
-    
-    // Procedural deep ocean shader material
-    const globeMat = new THREE.MeshPhongMaterial({
-      color: 0x051326,
-      emissive: 0x020a14,
-      specular: 0x00f0ff,
-      shininess: 30,
+    const oceanMaterial = new THREE.ShaderMaterial({
       wireframe: false,
       transparent: true,
-      opacity: 0.94,
-    });
-    const globeMesh = new THREE.Mesh(sphereGeo, globeMat);
-    globeGroup.add(globeMesh);
-
-    // 2. Graticule Lines (Scientific Latitude/Longitude Grid)
-    const wireGeo = new THREE.SphereGeometry(sphereRadius + 0.2, 36, 18);
-    const wireMat = new THREE.MeshBasicMaterial({
-      color: 0x00e5ff,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.08,
-    });
-    const wireMesh = new THREE.Mesh(wireGeo, wireMat);
-    globeGroup.add(wireMesh);
-
-    // 3. Atmospheric Glow
-    const atmosGeo = new THREE.SphereGeometry(sphereRadius + 4, 48, 48);
-    const atmosMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uWaveHeight: { value: 4.2 * waveHeightScale },
+        uLayer: { value: activeLayer === "composite" ? 0 : activeLayer === "sst" ? 1 : activeLayer === "algae" ? 2 : 3 },
+        uBaseSST: { value: baseSST },
+        uBaseChl: { value: baseChl },
+      },
       vertexShader: `
+        uniform float uTime;
+        uniform float uWaveHeight;
+        varying vec2 vUv;
+        varying vec3 vWorldPosition;
         varying vec3 vNormal;
+        varying float vElevation;
+        varying float vTemperature;
+        varying float vAlgaeConcentration;
+
+        // Gerstner Wave Formula
+        vec3 gerstner(vec3 p, float steepness, float wavelength, vec2 dir, float time, inout vec3 tangent, inout vec3 binormal) {
+          float k = 2.0 * 3.14159265 / wavelength;
+          float c = sqrt(9.8 / k);
+          vec2 d = normalize(dir);
+          float f = k * (dot(d, p.xz) - c * time * 0.85);
+          float a = steepness / k;
+
+          tangent += vec3(-d.x * d.x * (steepness * sin(f)), d.x * (steepness * cos(f)), -d.x * d.y * (steepness * sin(f)));
+          binormal += vec3(-d.x * d.y * (steepness * sin(f)), d.y * (steepness * cos(f)), -d.y * d.y * (steepness * sin(f)));
+
+          return vec3(d.x * (a * cos(f)), a * sin(f), d.y * (a * cos(f)));
+        }
+
         void main() {
-          vNormal = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vUv = uv;
+          vec3 pos = position;
+
+          vec3 tangent = vec3(1.0, 0.0, 0.0);
+          vec3 binormal = vec3(0.0, 0.0, 1.0);
+
+          // Synthesize primary swells & secondary chop
+          vec3 waveOffset = vec3(0.0);
+          waveOffset += gerstner(pos, 0.35, 60.0, vec2(1.0, 0.4), uTime * 1.1, tangent, binormal);
+          waveOffset += gerstner(pos, 0.25, 34.0, vec2(0.3, 1.0), uTime * 1.3, tangent, binormal);
+          waveOffset += gerstner(pos, 0.18, 18.0, vec2(-0.7, 0.6), uTime * 1.6, tangent, binormal);
+          waveOffset += gerstner(pos, 0.12, 9.0, vec2(0.8, -0.5), uTime * 2.1, tangent, binormal);
+
+          pos += waveOffset * (uWaveHeight * 0.28);
+          vElevation = pos.y;
+
+          vec3 norm = normalize(cross(binormal, tangent));
+          vNormal = norm;
+          vWorldPosition = (modelMatrix * vec4(pos, 1.0)).xyz;
+
+          // SST Gradient: Coastal upwelling cold tongue on western edge, warm stratified pool on eastern offshore
+          float sstSpatialVariation = sin(pos.x * 0.015 + 0.4) * 2.8 + cos(pos.z * 0.018) * 1.6;
+          vTemperature = sstSpatialVariation;
+
+          // Algae / Chlorophyll Concentration: High in nutrient-rich coastal thermal convergence
+          float chlaSpatial = sin(pos.x * 0.035 + uTime * 0.1) * cos(pos.z * 0.03 + uTime * 0.08);
+          vAlgaeConcentration = clamp(0.5 + 0.5 * chlaSpatial + 0.3 * sin(pos.x * 0.08), 0.0, 1.0);
+
+          gl_Position = projectionMatrix * viewMatrix * vec4(vWorldPosition, 1.0);
         }
       `,
       fragmentShader: `
+        uniform int uLayer; // 0: Composite, 1: SST, 2: Algae, 3: Waves
+        uniform float uBaseSST;
+        uniform float uBaseChl;
+        varying vec2 vUv;
+        varying vec3 vWorldPosition;
         varying vec3 vNormal;
+        varying float vElevation;
+        varying float vTemperature;
+        varying float vAlgaeConcentration;
+
+        // Color ramp functions
+        vec3 getSSTColor(float t) {
+          // Cold upwelling (13°C) -> Mild (16°C) -> Stratified Warm (21°C+)
+          vec3 coldBlue = vec3(0.02, 0.15, 0.38);
+          vec3 mildCyan = vec3(0.0, 0.72, 0.85);
+          vec3 warmAmber = vec3(0.96, 0.62, 0.08);
+          vec3 hotCrimson = vec3(0.92, 0.18, 0.18);
+
+          float norm = clamp((t - 13.0) / 9.0, 0.0, 1.0);
+          if (norm < 0.35) {
+            return mix(coldBlue, mildCyan, norm / 0.35);
+          } else if (norm < 0.7) {
+            return mix(mildCyan, warmAmber, (norm - 0.35) / 0.35);
+          } else {
+            return mix(warmAmber, hotCrimson, (norm - 0.7) / 0.3);
+          }
+        }
+
+        vec3 getAlgaeColor(float conc, float baseVal) {
+          // Oligotrophic clear blue -> Mesotrophic turquoise -> Eutrophic Bloom Fluorescent Green
+          vec3 deepOcean = vec3(0.01, 0.08, 0.18);
+          vec3 bioTeal = vec3(0.04, 0.58, 0.52);
+          vec3 bloomGreen = vec3(0.0, 1.0, 0.55); // Fluorescent chlorophyll emission
+          vec3 toxicGlow = vec3(0.2, 0.95, 0.1);
+
+          float level = clamp(conc * (baseVal / 3.5), 0.0, 1.5);
+          if (level < 0.4) {
+            return mix(deepOcean, bioTeal, level / 0.4);
+          } else if (level < 0.9) {
+            return mix(bioTeal, bloomGreen, (level - 0.4) / 0.5);
+          } else {
+            return mix(bloomGreen, toxicGlow, clamp((level - 0.9) / 0.6, 0.0, 1.0));
+          }
+        }
+
         void main() {
-          float intensity = pow(0.68 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.8);
-          gl_FragColor = vec4(0.0, 0.94, 1.0, 1.0) * intensity * 0.8;
+          vec3 lightDir = normalize(vec3(0.4, 0.85, 0.5));
+          vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+          vec3 normal = normalize(vNormal);
+
+          // Diffuse + Specular Crest Glint
+          float diff = max(dot(normal, lightDir), 0.0);
+          vec3 halfVector = normalize(lightDir + viewDir);
+          float spec = pow(max(dot(normal, halfVector), 0.0), 48.0) * 1.8;
+
+          // Wave crest foam calculation
+          float foam = smoothstep(1.8, 3.8, vElevation);
+
+          float effectiveTemp = uBaseSST + vTemperature;
+          vec3 sstCol = getSSTColor(effectiveTemp);
+          vec3 algaeCol = getAlgaeColor(vAlgaeConcentration, uBaseChl);
+
+          vec3 finalColor = vec3(0.0);
+
+          if (uLayer == 0) {
+            // COMPOSITE: Deep thermal gradient base + glowing algae bloom plumes + foam crests
+            vec3 oceanBase = mix(sstCol * 0.65, algaeCol, clamp(vAlgaeConcentration * 0.75, 0.0, 0.85));
+            finalColor = oceanBase * (diff * 0.7 + 0.35);
+            // Add fluorescent chlorophyll radiance
+            finalColor += algaeCol * 0.28 * vAlgaeConcentration;
+            // Add foam crests
+            finalColor = mix(finalColor, vec3(0.85, 0.96, 1.0), foam * 0.65);
+            // Add specular sun glint
+            finalColor += vec3(0.9, 0.98, 1.0) * spec * 0.7;
+          } else if (uLayer == 1) {
+            // SST THERMAL ISOTHERMS: Pure thermal color mapping + temperature contour pulse
+            float isotherm = abs(fract(effectiveTemp * 0.8) - 0.5);
+            float contourLine = smoothstep(0.06, 0.0, isotherm);
+            finalColor = sstCol * (diff * 0.5 + 0.5);
+            finalColor += vec3(1.0, 1.0, 1.0) * contourLine * 0.35;
+            finalColor = mix(finalColor, vec3(1.0), foam * 0.4);
+            finalColor += vec3(1.0) * spec * 0.5;
+          } else if (uLayer == 2) {
+            // ALGAL BLOOM (CHLOROPHYLL): Fluorescent biological concentration field
+            finalColor = algaeCol * (diff * 0.4 + 0.6);
+            finalColor += vec3(0.0, 1.0, 0.6) * pow(vAlgaeConcentration, 2.0) * 0.45;
+            finalColor = mix(finalColor, vec3(0.7, 1.0, 0.85), foam * 0.5);
+            finalColor += vec3(0.6, 1.0, 0.8) * spec * 0.6;
+          } else {
+            // PHYSICAL WAVES & DYNAMICS: Deep navy oceanic fluid with high-contrast foam
+            vec3 oceanNavy = vec3(0.02, 0.09, 0.22);
+            vec3 waveCrestAqua = vec3(0.0, 0.75, 0.88);
+            finalColor = mix(oceanNavy, waveCrestAqua, clamp((vElevation + 2.0) / 5.0, 0.0, 1.0));
+            finalColor = finalColor * (diff * 0.8 + 0.3);
+            finalColor = mix(finalColor, vec3(0.95, 0.98, 1.0), foam * 0.85);
+            finalColor += vec3(1.0) * spec * 0.9;
+          }
+
+          // Depth / Fresnel Atmospheric Fade
+          float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 3.0);
+          finalColor += vec3(0.0, 0.6, 0.8) * fresnel * 0.35;
+
+          gl_FragColor = vec4(finalColor, 0.96);
         }
       `,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
-      transparent: true,
     });
-    const atmosMesh = new THREE.Mesh(atmosGeo, atmosMat);
-    globeGroup.add(atmosMesh);
 
-    // 4. Observation Particle Swarm (representing satellite telemetry tracks)
-    const particleCount = 1400;
+    const oceanMesh = new THREE.Mesh(oceanGeo, oceanMaterial);
+    scene.add(oceanMesh);
+
+    // 5. Floating Bioluminescent Phytoplankton Particle Swarm
+    const particleCount = 2200;
     const particleGeo = new THREE.BufferGeometry();
-    const positions = new Float32Array(particleCount * 3);
-    const colors = new Float32Array(particleCount * 3);
+    const particlePositions = new Float32Array(particleCount * 3);
+    const particleColors = new Float32Array(particleCount * 3);
 
     for (let i = 0; i < particleCount; i++) {
-      const u = Math.random();
-      const v = Math.random();
-      const theta = u * 2.0 * Math.PI;
-      const phi = Math.acos(2.0 * v - 1.0);
-      const r = sphereRadius + 0.8 + Math.random() * 2.5;
+      const px = (Math.random() - 0.5) * 260;
+      const pz = (Math.random() - 0.5) * 260;
+      const py = 1.0 + Math.random() * 4.5;
 
-      const x = r * Math.sin(phi) * Math.cos(theta);
-      const y = r * Math.sin(phi) * Math.sin(theta);
-      const z = r * Math.cos(phi);
+      particlePositions[i * 3] = px;
+      particlePositions[i * 3 + 1] = py;
+      particlePositions[i * 3 + 2] = pz;
 
-      positions[i * 3] = x;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = z;
-
-      // Color variation between cyan and aqua
-      const isAqua = Math.random() > 0.4;
-      colors[i * 3] = isAqua ? 0.0 : 0.0;
-      colors[i * 3 + 1] = isAqua ? 0.9 : 0.95;
-      colors[i * 3 + 2] = isAqua ? 0.64 : 1.0;
+      // Chlorophyll emerald to bioluminescent cyan colors
+      const isToxic = Math.random() > 0.45;
+      if (isToxic) {
+        particleColors[i * 3] = 0.0;
+        particleColors[i * 3 + 1] = 1.0;
+        particleColors[i * 3 + 2] = 0.55; // Fluorescent green
+      } else {
+        particleColors[i * 3] = 0.0;
+        particleColors[i * 3 + 1] = 0.88;
+        particleColors[i * 3 + 2] = 1.0; // Cyan bio-glow
+      }
     }
 
-    particleGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    particleGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+    particleGeo.setAttribute("color", new THREE.BufferAttribute(particleColors, 3));
 
     const particleMat = new THREE.PointsMaterial({
-      size: 1.5,
+      size: 2.2,
       vertexColors: true,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.85,
       blending: THREE.AdditiveBlending,
     });
-    const particlePoints = new THREE.Points(particleGeo, particleMat);
-    globeGroup.add(particlePoints);
+    const particleSystem = new THREE.Points(particleGeo, particleMat);
+    scene.add(particleSystem);
 
-    // 5. Target Location Marker & Expanding Scan Ring
-    const markerGeo = new THREE.SphereGeometry(1.6, 16, 16);
-    const markerMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-    const targetMarker = new THREE.Mesh(markerGeo, markerMat);
-    targetMarker.visible = false;
-    globeGroup.add(targetMarker);
+    // 6. Floating Oceanographic Research Buoy (Moored Telemetry Sounder)
+    const buoyGroup = new THREE.Group();
+    
+    // Hull
+    const hullGeo = new THREE.CylinderGeometry(2.4, 3.2, 1.8, 16);
+    const hullMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b, // Scientific safety yellow
+      metalness: 0.3,
+      roughness: 0.4,
+    });
+    const buoyHull = new THREE.Mesh(hullGeo, hullMat);
+    buoyGroup.add(buoyHull);
 
-    const ringGeo = new THREE.RingGeometry(2.2, 3.8, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
+    // Mast
+    const mastGeo = new THREE.CylinderGeometry(0.2, 0.25, 5.5, 8);
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.8 });
+    const buoyMast = new THREE.Mesh(mastGeo, mastMat);
+    buoyMast.position.y = 3.2;
+    buoyGroup.add(buoyMast);
+
+    // Flashing Strobe Beacon on Buoy
+    const beaconGeo = new THREE.SphereGeometry(0.6, 12, 12);
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+    const buoyBeacon = new THREE.Mesh(beaconGeo, beaconMat);
+    buoyBeacon.position.y = 6.2;
+    buoyGroup.add(buoyBeacon);
+
+    // Sounding cable into ocean depth
+    const cableGeo = new THREE.CylinderGeometry(0.08, 0.08, 30, 6);
+    const cableMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.35 });
+    const cable = new THREE.Mesh(cableGeo, cableMat);
+    cable.position.y = -15;
+    buoyGroup.add(cable);
+
+    buoyGroup.position.set(22, 0, -15);
+    scene.add(buoyGroup);
+
+    // 7. Interactive Sonar Probe Target Ring
+    const sonarGeo = new THREE.RingGeometry(2.8, 3.6, 32);
+    sonarGeo.rotateX(-Math.PI / 2);
+    const sonarMat = new THREE.MeshBasicMaterial({
       color: 0x00f0ff,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.9,
     });
-    const scanRing = new THREE.Mesh(ringGeo, ringMat);
-    scanRing.visible = false;
-    globeGroup.add(scanRing);
+    const sonarMarker = new THREE.Mesh(sonarGeo, sonarMat);
+    sonarMarker.visible = false;
+    scene.add(sonarMarker);
 
-    // Lights
-    const ambientLight = new THREE.AmbientLight(0x0c2545, 1.2);
+    // 8. Lights Setup
+    const ambientLight = new THREE.AmbientLight(0x0a2240, 1.8);
     scene.add(ambientLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0x00f0ff, 1.8);
-    dirLight1.position.set(120, 80, 100);
-    scene.add(dirLight1);
+    const dirLight = new THREE.DirectionalLight(0x70d6ff, 2.5);
+    dirLight.position.set(80, 120, 60);
+    scene.add(dirLight);
 
-    const dirLight2 = new THREE.DirectionalLight(0x0077fe, 1.2);
-    dirLight2.position.set(-100, -60, -80);
-    scene.add(dirLight2);
+    const secondaryLight = new THREE.DirectionalLight(0x00f0ff, 1.2);
+    secondaryLight.position.set(-80, 60, -80);
+    scene.add(secondaryLight);
 
-    // Interaction handlers
-    let isDragging = false;
-    let prevMouseX = 0;
-    let prevMouseY = 0;
+    // 9. Interactive Camera Orbit Controls
+    const controls = {
+      isDragging: false,
+      prevX: 0,
+      prevY: 0,
+      rotX: 0.42,
+      rotY: 0.15,
+      targetRotX: 0.42,
+      targetRotY: 0.15,
+      zoom: 155,
+    };
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
 
     const onMouseDown = (e: MouseEvent) => {
-      isDragging = true;
-      prevMouseX = e.clientX;
-      prevMouseY = e.clientY;
+      controls.isDragging = true;
+      controls.prevX = e.clientX;
+      controls.prevY = e.clientY;
     };
 
     const onMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      const deltaX = e.clientX - prevMouseX;
-      const deltaY = e.clientY - prevMouseY;
-      prevMouseX = e.clientX;
-      prevMouseY = e.clientY;
+      const rect = container.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
-      globeGroup.rotation.y += deltaX * 0.005;
-      globeGroup.rotation.x += deltaY * 0.005;
-      if (sceneRef.current) {
-        sceneRef.current.currentRotation.y = globeGroup.rotation.y;
-        sceneRef.current.currentRotation.x = globeGroup.rotation.x;
-        sceneRef.current.targetRotation.y = globeGroup.rotation.y;
-        sceneRef.current.targetRotation.x = globeGroup.rotation.x;
+      if (controls.isDragging) {
+        const dx = e.clientX - controls.prevX;
+        const dy = e.clientY - controls.prevY;
+        controls.prevX = e.clientX;
+        controls.prevY = e.clientY;
+
+        controls.targetRotY -= dx * 0.006;
+        controls.targetRotX = Math.max(0.18, Math.min(1.2, controls.targetRotX - dy * 0.005));
       }
     };
 
     const onMouseUp = () => {
-      isDragging = false;
+      controls.isDragging = false;
     };
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      camera.position.z = Math.max(140, Math.min(320, camera.position.z + e.deltaY * 0.15));
+      controls.zoom = Math.max(65, Math.min(260, controls.zoom + e.deltaY * 0.14));
     };
 
     const dom = renderer.domElement;
@@ -219,7 +449,6 @@ export const OceanGlobe: React.FC<OceanGlobeProps> = ({
     window.addEventListener("mouseup", onMouseUp);
     dom.addEventListener("wheel", onWheel, { passive: false });
 
-    // Handle Resize
     const handleResize = () => {
       if (!mountRef.current) return;
       const w = mountRef.current.clientWidth;
@@ -230,18 +459,21 @@ export const OceanGlobe: React.FC<OceanGlobeProps> = ({
     };
     window.addEventListener("resize", handleResize);
 
-    sceneRef.current = {
+    sceneRefs.current = {
       scene,
       camera,
       renderer,
-      globeGroup,
-      targetMarker,
-      scanRing,
-      targetRotation: { x: 0.2, y: 0.0 },
-      currentRotation: { x: 0.2, y: 0.0 },
+      oceanMesh,
+      oceanMaterial,
+      particleSystem,
+      buoyGroup,
+      sonarMarker,
+      raycaster,
+      mouse,
+      controls,
     };
 
-    // Animation Loop
+    // 10. Animation Loop
     let animId: number;
     const clock = new THREE.Clock();
 
@@ -250,32 +482,94 @@ export const OceanGlobe: React.FC<OceanGlobeProps> = ({
       const delta = clock.getDelta();
       const elapsed = clock.getElapsedTime();
 
-      // Slow orbital drift if not manually dragging
-      if (!isDragging) {
-        // Smooth camera tween towards target rotation
-        const ref = sceneRef.current;
-        if (ref) {
-          ref.currentRotation.x += (ref.targetRotation.x - ref.currentRotation.x) * 0.05;
-          ref.currentRotation.y += (ref.targetRotation.y - ref.currentRotation.y) * 0.05;
-          globeGroup.rotation.x = ref.currentRotation.x;
-          globeGroup.rotation.y = ref.currentRotation.y;
-        } else {
-          globeGroup.rotation.y += delta * 0.04;
-        }
-      }
+      // Update shader wave time
+      oceanMaterial.uniforms.uTime.value = elapsed;
 
-      // Animate scan ring pulse
-      if (scanRing.visible) {
-        const scale = 1.0 + (elapsed % 1.6) * 1.5;
-        scanRing.scale.set(scale, scale, 1);
-        (scanRing.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.9 - (elapsed % 1.6) * 0.6);
-      }
+      // Smooth camera interpolation
+      controls.rotX += (controls.targetRotX - controls.rotX) * 0.08;
+      controls.rotY += (controls.targetRotY - controls.rotY) * 0.08;
 
-      // Particle subtle shimmer
-      particlePoints.rotation.y += delta * 0.02;
+      const camDist = controls.zoom;
+      camera.position.x = camDist * Math.sin(controls.rotY) * Math.cos(controls.rotX);
+      camera.position.y = camDist * Math.sin(controls.rotX);
+      camera.position.z = camDist * Math.cos(controls.rotY) * Math.cos(controls.rotX);
+      camera.lookAt(0, -5, 0);
+
+      // Float and bob the research buoy on the wave surface
+      const bx = buoyGroup.position.x;
+      const bz = buoyGroup.position.z;
+      // Approximate primary wave elevation at buoy coordinates
+      const buoyWaveY =
+        Math.sin(bx * 0.08 + elapsed * 1.6) * 1.8 +
+        Math.cos(bz * 0.07 + elapsed * 1.4) * 1.4;
+      buoyGroup.position.y = buoyWaveY * (waveHeightScale * 0.9);
+      buoyGroup.rotation.z = Math.sin(elapsed * 1.4) * 0.12;
+      buoyGroup.rotation.x = Math.cos(elapsed * 1.6) * 0.1;
+
+      // Pulse beacon strobe
+      const strobe = (Math.sin(elapsed * 4.5) + 1.0) * 0.5;
+      (buoyBeacon.material as THREE.MeshBasicMaterial).color.setRGB(
+        strobe * 0.2,
+        0.8 + strobe * 0.2,
+        1.0
+      );
+
+      // Animate floating microalgae particles with current eddies
+      const posAttr = particleGeo.attributes.position as THREE.BufferAttribute;
+      const pArray = posAttr.array as Float32Array;
+
+      for (let i = 0; i < particleCount; i++) {
+        const idx = i * 3;
+        // Swirl in surface eddies
+        pArray[idx] += Math.sin(pArray[idx + 2] * 0.03 + elapsed * 0.4) * 0.06;
+        pArray[idx + 2] += Math.cos(pArray[idx] * 0.03 + elapsed * 0.4) * 0.06;
+
+        // Bob with waves
+        pArray[idx + 1] = 1.2 + Math.sin(pArray[idx] * 0.06 + elapsed * 1.8) * 1.5;
+
+        // Wrap around boundaries
+        if (pArray[idx] > 130) pArray[idx] = -130;
+        if (pArray[idx] < -130) pArray[idx] = 130;
+        if (pArray[idx + 2] > 130) pArray[idx + 2] = -130;
+        if (pArray[idx + 2] < -130) pArray[idx + 2] = 130;
+      }
+      posAttr.needsUpdate = true;
+
+      // Raycast mouse cursor onto the ocean waves for Sonar Sonde
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObject(oceanMesh);
+
+      if (intersects.length > 0) {
+        const hit = intersects[0].point;
+        sonarMarker.position.set(hit.x, hit.y + 0.3, hit.z);
+        sonarMarker.visible = true;
+
+        // Sonar ring expansion
+        const scale = 1.0 + (elapsed % 1.2) * 0.8;
+        sonarMarker.scale.set(scale, scale, scale);
+        (sonarMarker.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 1.0 - (elapsed % 1.2));
+
+        // Derive local physical readings at this exact coordinate
+        const localTemp = baseSST + Math.sin(hit.x * 0.015 + 0.4) * 2.8 + Math.cos(hit.z * 0.018) * 1.6;
+        const localChl = Math.max(0.4, baseChl * (0.8 + 0.5 * Math.sin(hit.x * 0.035 + hit.z * 0.03)));
+        const localWave = Math.abs(hit.y) + 1.2;
+
+        setHoverData({
+          x: Math.round(hit.x),
+          y: Math.round(hit.z),
+          temp: parseFloat(localTemp.toFixed(2)),
+          chla: parseFloat(localChl.toFixed(2)),
+          waveH: parseFloat(localWave.toFixed(2)),
+          visible: true,
+        });
+      } else {
+        sonarMarker.visible = false;
+        setHoverData((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      }
 
       renderer.render(scene, camera);
     };
+
     animate();
 
     const currentMount = mountRef.current;
@@ -293,126 +587,174 @@ export const OceanGlobe: React.FC<OceanGlobeProps> = ({
     };
   }, []);
 
-  // Update target coordinates and animate camera to target
-  useEffect(() => {
-    if (!sceneRef.current || !location) return;
-
-    const { targetMarker, scanRing, targetRotation } = sceneRef.current;
-    const sphereRadius = 75;
-
-    // Convert Lat/Lon to 3D Cartesian coordinates
-    const phi = (90 - location.latitude) * (Math.PI / 180);
-    const theta = (location.longitude + 180) * (Math.PI / 180);
-
-    const x = -(sphereRadius + 0.5) * Math.sin(phi) * Math.cos(theta);
-    const z = (sphereRadius + 0.5) * Math.sin(phi) * Math.sin(theta);
-    const y = (sphereRadius + 0.5) * Math.cos(phi);
-
-    targetMarker.position.set(x, y, z);
-    targetMarker.visible = true;
-
-    scanRing.position.set(x * 1.01, y * 1.01, z * 1.01);
-    scanRing.lookAt(x * 2, y * 2, z * 2);
-    scanRing.visible = true;
-
-    // Animate target rotation so target faces the camera directly
-    const targetRotY = -theta - Math.PI / 2;
-    const targetRotX = phi - Math.PI / 2;
-
-    targetRotation.x = targetRotX;
-    targetRotation.y = targetRotY;
-  }, [location]);
-
   return (
-    <div className="relative w-full h-full min-h-[380px] bg-gradient-to-b from-ocean-950 via-ocean-900 to-ocean-950 rounded-xl overflow-hidden border border-ocean-800/80 shadow-2xl flex flex-col">
-      {/* 3D Canvas Mount */}
+    <div className="relative w-full h-full min-h-[400px] bg-gradient-to-b from-[#020813] via-[#031326] to-[#01060e] rounded-xl overflow-hidden border border-ocean-800/80 shadow-2xl flex flex-col select-none">
+      {/* 3D WebGL Canvas */}
       <div ref={mountRef} className="w-full flex-1 cursor-grab active:cursor-grabbing" />
 
-      {/* Target Coordinates Overlay Badge */}
-      {location && (
-        <div className="absolute top-4 left-4 z-10 glass-panel px-3.5 py-2.5 rounded-lg border-l-2 border-l-bioglow-cyan animate-in fade-in slide-in-from-left duration-300">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-bioglow-cyan animate-ping"></span>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-bioglow-cyan font-bold">
-              TARGET RESOLVED
+      {/* TOP-LEFT: Coastal Mission Sector & Ocean Telemetry HUD */}
+      <div className="absolute top-3.5 left-3.5 z-10 glass-panel px-4 py-3 rounded-lg border-l-2 border-l-bioglow-cyan shadow-xl animate-in fade-in duration-300">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-bioglow-cyan animate-pulse"></span>
+          <span className="text-[10px] font-mono uppercase tracking-widest text-bioglow-cyan font-bold">
+            3D OCEAN SURFACE SIMULATOR
+          </span>
+        </div>
+        <p className="text-sm font-semibold text-white tracking-wide mt-0.5 font-mono">
+          {targetName}
+        </p>
+        <p className="text-[11px] font-mono text-slate-400 flex items-center gap-2 mt-0.5">
+          <span>NOAA-INCOIS MOORED BUOY TELEMETRY</span>
+          <span className="text-emerald-400 font-semibold">• LIVE SOUNDING</span>
+        </p>
+
+        {/* Real-time Environmental Values */}
+        <div className="mt-2.5 pt-2.5 border-t border-ocean-700/60 grid grid-cols-3 gap-3 text-xs font-mono">
+          <div className="flex flex-col">
+            <span className="text-[9px] text-slate-400 uppercase flex items-center gap-1">
+              <Thermometer className="w-2.5 h-2.5 text-amber-400" />
+              SST THERMAL
+            </span>
+            <span className="text-amber-400 font-bold mt-0.5">
+              {baseSST.toFixed(1)}°C
+              {sstResult?.anomaly && (
+                <span className="text-[10px] ml-1 text-slate-300">
+                  ({sstResult.anomaly.value_c > 0 ? "+" : ""}{sstResult.anomaly.value_c}°C)
+                </span>
+              )}
             </span>
           </div>
-          <p className="text-sm font-semibold text-white tracking-wide mt-0.5 font-mono">
-            {location.location_name}
-          </p>
-          <p className="text-[11px] font-mono text-slate-400">
-            {location.latitude.toFixed(2)}°N, {location.longitude.toFixed(2)}°E · {location.coastal_zone || "Coastal Marine"}
-          </p>
 
-          {/* Real-time Telemetry Metrics on Target */}
-          {(sstResult?.latest || chlorophyllResult?.latest) && (
-            <div className="mt-2 pt-2 border-t border-ocean-700/60 flex items-center gap-3 text-xs font-mono">
-              {sstResult?.latest && (
-                <div className="flex flex-col">
-                  <span className="text-[9px] text-slate-400 uppercase">SST OISST</span>
-                  <span className="text-bioglow-cyan font-bold">
-                    {sstResult.latest.value_c}°C
-                    {sstResult.anomaly && (
-                      <span className="text-[10px] ml-1 text-slate-300">
-                        ({sstResult.anomaly.value_c > 0 ? "+" : ""}{sstResult.anomaly.value_c}°C)
-                      </span>
-                    )}
-                  </span>
-                </div>
-              )}
-              {chlorophyllResult?.latest && (
-                <div className="flex flex-col">
-                  <span className="text-[9px] text-slate-400 uppercase">CHL-A VIIRS</span>
-                  <span className="text-bioglow-aqua font-bold">
-                    {chlorophyllResult.latest.chlorophyll_mg_m3} mg/m³
-                  </span>
-                </div>
-              )}
+          <div className="flex flex-col">
+            <span className="text-[9px] text-slate-400 uppercase flex items-center gap-1">
+              <Sparkles className="w-2.5 h-2.5 text-bioglow-aqua" />
+              CHL-A ALGAE
+            </span>
+            <span className="text-emerald-400 font-bold mt-0.5">
+              {baseChl.toFixed(2)} <span className="text-[10px] text-slate-400 font-normal">mg/m³</span>
+            </span>
+          </div>
+
+          <div className="flex flex-col">
+            <span className="text-[9px] text-slate-400 uppercase flex items-center gap-1">
+              <Waves className="w-2.5 h-2.5 text-bioglow-cyan" />
+              SWELL HT (Hs)
+            </span>
+            <span className="text-bioglow-cyan font-bold mt-0.5">
+              {(1.8 * waveHeightScale).toFixed(1)} m
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* TOP-RIGHT: Dynamic Sonar Sonde Probe (Tracks Hover Coordinates) */}
+      {hoverData.visible && (
+        <div className="absolute top-3.5 right-3.5 z-10 glass-panel px-3 py-2 rounded-lg border border-bioglow-cyan/40 shadow-2xl font-mono text-xs animate-in fade-in duration-150">
+          <div className="flex items-center gap-1.5 text-bioglow-cyan font-bold text-[10px] uppercase tracking-wider">
+            <Activity className="w-3 h-3 animate-spin text-bioglow-cyan" />
+            SONAR SONDE PROBE
+          </div>
+          <div className="mt-1 flex items-center gap-3 text-[11px] text-slate-200">
+            <div>
+              <span className="text-slate-400 text-[10px]">TEMP:</span>{" "}
+              <span className="text-amber-400 font-bold">{hoverData.temp}°C</span>
             </div>
-          )}
+            <div>
+              <span className="text-slate-400 text-[10px]">CHL-A:</span>{" "}
+              <span className="text-emerald-400 font-bold">{hoverData.chla} mg/m³</span>
+            </div>
+            <div>
+              <span className="text-slate-400 text-[10px]">WAVE:</span>{" "}
+              <span className="text-bioglow-cyan font-bold">{hoverData.waveH}m</span>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Layer Selector & Controls */}
-      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-10 text-xs font-mono pointer-events-auto">
-        <div className="flex items-center gap-1 bg-ocean-950/80 backdrop-blur-md p-1 rounded-lg border border-ocean-800">
+      {/* BOTTOM-LEFT & BOTTOM-RIGHT: Multi-Layer Ocean Visualizer Controls */}
+      <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 z-10 text-xs font-mono pointer-events-auto">
+        {/* Layer Selectors: Composite vs SST vs Algae vs Waves */}
+        <div className="flex items-center gap-1 bg-ocean-950/85 backdrop-blur-md p-1 rounded-lg border border-ocean-800 shadow-xl">
           <button
             onClick={() => setActiveLayer("composite")}
-            className={`px-2.5 py-1 rounded transition-all ${
+            className={`px-2.5 py-1 rounded flex items-center gap-1.5 transition-all ${
               activeLayer === "composite"
-                ? "bg-bioglow-cyan/20 text-bioglow-cyan font-semibold border border-bioglow-cyan/40"
+                ? "bg-bioglow-cyan/20 text-bioglow-cyan font-semibold border border-bioglow-cyan/50 shadow-sm"
                 : "text-slate-400 hover:text-slate-200"
             }`}
           >
-            COMPOSITE
+            <Eye className="w-3.5 h-3.5" />
+            <span>COMPOSITE</span>
           </button>
+
           <button
             onClick={() => setActiveLayer("sst")}
-            className={`px-2.5 py-1 rounded transition-all ${
+            className={`px-2.5 py-1 rounded flex items-center gap-1.5 transition-all ${
               activeLayer === "sst"
-                ? "bg-bioglow-cyan/20 text-bioglow-cyan font-semibold border border-bioglow-cyan/40"
+                ? "bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/50 shadow-sm"
                 : "text-slate-400 hover:text-slate-200"
             }`}
           >
-            SST THERMAL
+            <Thermometer className="w-3.5 h-3.5 text-amber-400" />
+            <span>SEA TEMP (SST)</span>
           </button>
+
           <button
-            onClick={() => setActiveLayer("chlorophyll")}
-            className={`px-2.5 py-1 rounded transition-all ${
-              activeLayer === "chlorophyll"
-                ? "bg-bioglow-aqua/20 text-bioglow-aqua font-semibold border border-bioglow-aqua/40"
+            onClick={() => setActiveLayer("algae")}
+            className={`px-2.5 py-1 rounded flex items-center gap-1.5 transition-all ${
+              activeLayer === "algae"
+                ? "bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/50 shadow-sm"
                 : "text-slate-400 hover:text-slate-200"
             }`}
           >
-            CHL-A BIOMASS
+            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+            <span>ALGAE BLOOM</span>
+          </button>
+
+          <button
+            onClick={() => setActiveLayer("waves")}
+            className={`px-2.5 py-1 rounded flex items-center gap-1.5 transition-all ${
+              activeLayer === "waves"
+                ? "bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/50 shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Waves className="w-3.5 h-3.5 text-sky-400" />
+            <span>WAVE DYNAMICS</span>
           </button>
         </div>
 
-        <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400 bg-ocean-950/70 backdrop-blur-md px-2.5 py-1 rounded border border-ocean-800">
-          <Compass className="w-3.5 h-3.5 text-bioglow-cyan" />
-          <span>DRAG TO ROTATE · SCROLL TO ZOOM</span>
+        {/* Wave Height Choppiness Slider & Navigation Hint */}
+        <div className="flex items-center gap-3 bg-ocean-950/85 backdrop-blur-md px-3 py-1 rounded-lg border border-ocean-800 shadow-xl">
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
+            <span className="text-[10px] text-slate-400">SWELL INTENSITY:</span>
+            <button
+              onClick={() => setWaveHeightScale(0.6)}
+              className={`px-1.5 py-0.5 text-[10px] rounded ${waveHeightScale === 0.6 ? "bg-ocean-700 text-white font-bold" : "text-slate-400 hover:text-white"}`}
+            >
+              CALM
+            </button>
+            <button
+              onClick={() => setWaveHeightScale(1.0)}
+              className={`px-1.5 py-0.5 text-[10px] rounded ${waveHeightScale === 1.0 ? "bg-ocean-700 text-white font-bold" : "text-slate-400 hover:text-white"}`}
+            >
+              MOD
+            </button>
+            <button
+              onClick={() => setWaveHeightScale(1.6)}
+              className={`px-1.5 py-0.5 text-[10px] rounded ${waveHeightScale === 1.6 ? "bg-ocean-700 text-white font-bold" : "text-slate-400 hover:text-white"}`}
+            >
+              SWELL
+            </button>
+          </div>
+
+          <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-400 border-l border-ocean-700/60 pl-2.5">
+            <Compass className="w-3 h-3 text-bioglow-cyan" />
+            <span>DRAG TO ORBIT · SCROLL TO ZOOM</span>
+          </div>
         </div>
       </div>
     </div>
   );
 };
+
