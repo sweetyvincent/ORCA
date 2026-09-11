@@ -109,12 +109,19 @@ export default function ORCAMissionControl() {
           </div>
         </div>
 
-        {/* Tactical Mission Input Console */}
+        {/* Tactical Mission Input & Chatbot Reply Console */}
         <div className="w-full mt-1">
           <TacticalConsole
             isStreaming={state.isStreaming}
             onSubmit={(q) => submitQuestion(q)}
             currentQuery={state.question}
+            synthesisResult={state.synthesisResult}
+            habAssessment={state.habAssessment}
+            sstResult={state.sstResult}
+            chlorophyllResult={state.chlorophyllResult}
+            advisoryResult={state.advisoryResult}
+            routerDecision={state.routerDecision}
+            location={state.location}
           />
         </div>
       </div>

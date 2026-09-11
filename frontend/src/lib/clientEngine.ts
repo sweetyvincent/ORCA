@@ -133,12 +133,24 @@ export function executeClientORCAPipeline(
   let isCancelled = false;
   const q = question.toLowerCase();
 
-  // 1. Resolve Location
+  // 1. Resolve Location (with intelligent aliases)
   let locKey = "california";
-  for (const k of Object.keys(COASTAL_REGIONS)) {
-    if (q.includes(k)) {
-      locKey = k;
-      break;
+  if (q.includes("kerala") || q.includes("malabar") || q.includes("cochin") || q.includes("kochi") || q.includes("southwest india")) {
+    locKey = "kerala";
+  } else if (q.includes("mumbai") || q.includes("bombay") || q.includes("konkan") || q.includes("maharashtra")) {
+    locKey = "mumbai";
+  } else if (q.includes("arabian") || q.includes("oman") || q.includes("goa")) {
+    locKey = "arabian sea";
+  } else if (q.includes("bengal") || q.includes("chennai") || q.includes("vizag") || q.includes("andhra") || q.includes("odisha") || q.includes("kolkata")) {
+    locKey = "bay of bengal";
+  } else if (q.includes("california") || q.includes("pacific") || q.includes("monterey") || q.includes("san francisco") || q.includes("la")) {
+    locKey = "california";
+  } else {
+    for (const k of Object.keys(COASTAL_REGIONS)) {
+      if (q.includes(k)) {
+        locKey = k;
+        break;
+      }
     }
   }
   const reg = COASTAL_REGIONS[locKey];
