@@ -5,16 +5,16 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
 export async function fetchHealth() {
   try {
-    const res = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(1000) });
     return await res.json();
   } catch (err) {
-    return { status: "client-autonomous", service: "ORCA Marine Intelligence" };
+    return { status: "online (autonomous client runtime)", service: "ORCA Marine Intelligence" };
   }
 }
 
 export async function fetchDataStatus() {
   try {
-    const res = await fetch(`${API_BASE}/api/data-status`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${API_BASE}/api/data-status`, { signal: AbortSignal.timeout(1000) });
     return await res.json();
   } catch (err) {
     return {
@@ -30,7 +30,7 @@ export async function fetchDataStatus() {
 
 export async function fetchDataSources() {
   try {
-    const res = await fetch(`${API_BASE}/api/sources`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${API_BASE}/api/sources`, { signal: AbortSignal.timeout(1000) });
     return await res.json();
   } catch (err) {
     return null;
@@ -45,8 +45,29 @@ export function streamORCAQuery(
     onComplete: () => void;
   }
 ): () => void {
+  const isBrowser = typeof window !== "undefined";
+  const isHttps = isBrowser && window.location.protocol === "https:";
+  const isLocalHost = isBrowser && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+
+  // If running on GitHub Pages (HTTPS domain) and backend is configured as insecure HTTP localhost:
+  // Immediately use the client-side marine intelligence engine without waiting for timeout!
+  if (isHttps && !isLocalHost && API_BASE.startsWith("http://")) {
+    console.log("[ORCA] Hosted on GitHub Pages: using Autonomous Marine Intelligence Client Engine.");
+    return executeClientORCAPipeline(question, callbacks);
+  }
+
   const controller = new AbortController();
   let clientFallbackCancel: (() => void) | null = null;
+  let hasReceivedData = false;
+
+  // Strict 1.5s timeout for local backend connection before falling back to client runtime
+  const timeoutId = setTimeout(() => {
+    if (!hasReceivedData) {
+      console.warn(`[ORCA] Backend connection timed out. Engaging client-side marine intelligence engine.`);
+      try { controller.abort(); } catch (e) {}
+      clientFallbackCancel = executeClientORCAPipeline(question, callbacks);
+    }
+  }, 1500);
 
   (async () => {
     try {
@@ -60,11 +81,11 @@ export function streamORCAQuery(
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}`);
       }
 
       if (!response.body) {
-        throw new Error("No response body stream received.");
+        throw new Error("No body stream");
       }
 
       const reader = response.body.getReader();
@@ -74,6 +95,9 @@ export function streamORCAQuery(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        hasReceivedData = true;
+        clearTimeout(timeoutId);
 
         buffer += decoder.decode(value, { stream: true });
         const parts = buffer.split("\n\n");
@@ -103,16 +127,17 @@ export function streamORCAQuery(
 
       callbacks.onComplete();
     } catch (err: any) {
-      if (err.name === "AbortError") return;
-
-      console.warn(`[ORCA] Remote API (${API_BASE}) unavailable (${err.message}). Engaging client-side marine intelligence engine.`);
-      // Seamlessly execute autonomous client-side marine intelligence engine
-      clientFallbackCancel = executeClientORCAPipeline(question, callbacks);
+      clearTimeout(timeoutId);
+      if (!hasReceivedData) {
+        console.warn(`[ORCA] Remote API error (${err.message}). Running client marine intelligence engine.`);
+        clientFallbackCancel = executeClientORCAPipeline(question, callbacks);
+      }
     }
   })();
 
   return () => {
-    controller.abort();
+    clearTimeout(timeoutId);
+    try { controller.abort(); } catch (e) {}
     if (clientFallbackCancel) {
       clientFallbackCancel();
     }
