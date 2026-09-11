@@ -58,7 +58,7 @@ class CopernicusChlorophyllProvider(MarineDataProvider):
 
         raw_req_url = ""
         try:
-            async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+            async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
                 # Step 1: Probe latest available timestamp
                 probe_url = (
                     f"{self.base_url}?"

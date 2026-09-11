@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -182,28 +183,93 @@ Format response as a JSON object with keys:
                 "timestamp": advisory.timestamp
             })
 
-        classification = hab.classification if hab else "OBSERVED"
-        favourability_headline = f"Environmental Favourability: {classification}"
+        q = question.lower() if question else ""
+        has_sst_q = bool(re.search(r"sst|temperature|warm|heat|celsius|temp|oisst", q))
+        has_chl_q = bool(re.search(r"chlorophyll|chl|ocean col|phytoplankton|biomass|algae|plankton", q))
+        has_hab_q = bool(re.search(r"bloom|hab|red tide|favour|favor|toxicity|domoic|risk|harmful", q))
+        has_adv_q = bool(re.search(r"advisory|fisheries|closure|quarantine|warning|safe|fish|eat|swim", q))
 
-        combined_reasoning = ""
-        if hab:
-            combined_reasoning = (
-                f"Multi-agent synthesis evaluates the environmental favourability as {classification} (Risk Index: {hab.score:.2f}/1.00). "
+        classification = hab.classification if hab else "OBSERVED"
+        hab_score = hab.score if hab else 0.5
+
+        if has_sst_q and not has_chl_q and not has_hab_q and not has_adv_q and sst and sst.latest:
+            favourability_headline = f"SST Analysis: {sst.latest.value_c}°C ({sst.trend.direction} at {sst.trend.slope_c_per_day:+.3f}°C/day)"
+            summary = (
+                f"In response to your inquiry regarding sea-surface temperature for {location.location_name}: "
+                f"Real-time NOAA OISST v2.1 observations report a current sea-surface temperature of {sst.latest.value_c}°C. "
+                f"This represents a {sst.anomaly.value_c:+.2f}°C thermal anomaly relative to the NOAA 1971–2000 climatological baseline. "
+                f"The 7-day linear regression indicates an active {sst.trend.direction} trajectory with a linear slope of {sst.trend.slope_c_per_day:+.3f}°C/day, "
+                f"indicating {'marked thermal stratification' if abs(sst.trend.slope_c_per_day) > 0.03 else 'a stable thermal regime'} "
+                f"along the {location.coastal_zone}."
+            )
+            combined_reasoning = f"Thermal specialist confirms {sst.trend.direction} conditions at {sst.latest.value_c}°C ({sst.anomaly.value_c:+.2f}°C anomaly) with slope {sst.trend.slope_c_per_day:+.3f}°C/day."
+
+        elif has_chl_q and not has_sst_q and not has_hab_q and not has_adv_q and chlorophyll and chlorophyll.latest:
+            favourability_headline = f"Chlorophyll-a Telemetry: {chlorophyll.latest.chlorophyll_mg_m3} mg/m³ ({chlorophyll.baseline_comparison.relative_status.upper()})"
+            summary = (
+                f"In response to your inquiry regarding ocean colour and chlorophyll biomass for {location.location_name}: "
+                f"Copernicus / NOAA VIIRS DINEOF satellite observations measure near-surface chlorophyll-a concentration at "
+                f"{chlorophyll.latest.chlorophyll_mg_m3} mg/m³. This concentration ranks in the {chlorophyll.baseline_comparison.percentile}th "
+                f"percentile of the regional seasonal distribution ({chlorophyll.baseline_comparison.relative_status} relative status). "
+                f"DINEOF spatio-temporal gap-filling successfully reconstructed cloud-obscured pixels with {chlorophyll.data_quality.valid_obs_pct}% observation validity. "
+                f"Current biological biomass indicates {'high phytoplankton productivity' if chlorophyll.latest.chlorophyll_mg_m3 > 2.0 else 'moderate baseline primary productivity'}."
+            )
+            combined_reasoning = f"Chlorophyll specialist confirms {chlorophyll.latest.chlorophyll_mg_m3} mg/m³ ({chlorophyll.baseline_comparison.percentile}th percentile) via VIIRS DINEOF."
+
+        elif has_adv_q and not has_hab_q and not has_sst_q and not has_chl_q:
+            has_advisories = bool(advisory and advisory.active_advisories)
+            favourability_headline = (
+                "Coastal Advisory Notice: Active Alert in Sector"
+                if has_advisories
+                else "Coastal Advisory Status: Normal (No Active Closures)"
+            )
+            if has_advisories:
+                first_adv = advisory.active_advisories[0]
+                summary = (
+                    f"In response to your inquiry regarding coastal notices and fishery regulations for {location.location_name}: "
+                    f"The Coastal Advisory Specialist has retrieved an active bulletin from {first_adv.source}: '{first_adv.title}'. "
+                    f"Details: {first_adv.description} Severity: {first_adv.severity.upper()}. "
+                    f"Marine harvesters and stakeholders are advised to follow official agency guidelines."
+                )
+                combined_reasoning = f"Active bulletin: {first_adv.title} ({first_adv.source})."
+            else:
+                summary = (
+                    f"In response to your inquiry regarding coastal notices for {location.location_name}: "
+                    f"Official regulatory monitoring streams (CDPH, NOAA NCCOS, and INCOIS) report no active shellfish harvest closures "
+                    f"or marine biotoxin quarantines currently mandated for this coastal sector. Baseline environmental monitoring remains active."
+                )
+                combined_reasoning = f"No active regulatory closures currently in force for {location.location_name}."
+
+        elif has_hab_q and hab:
+            favourability_headline = f"Harmful Algal Bloom Favourability: {classification} ({int(hab_score * 100)}/100)"
+            summary = (
+                f"Evaluating harmful algal bloom (HAB) favourability for {location.location_name} over the coming 7 days: "
+                f"The multi-agent ecological matrix evaluates an {classification} environmental favourability signal (Composite Risk Index: {hab_score:.2f}/1.00). "
                 f"Thermal stability and biological biomass indicators converge to indicate conditions that are "
                 f"{'permissive of accelerated phytoplankton accumulation' if hab.score >= 0.45 else 'consistent with typical seasonal baseline conditions'}. "
                 f"{hab.regional_context}"
             )
-        elif sst_text:
-            combined_reasoning = "Thermal analysis complete. Stable or moderate thermal conditions observed without biological co-indicators requested."
-        elif chl_text:
-            combined_reasoning = "Bio-optical ocean colour assessment complete. Chlorophyll concentrations evaluated across coastal grid cells."
+            combined_reasoning = (
+                f"Multi-agent synthesis evaluates environmental favourability as {classification} (Risk Index: {hab_score:.2f}/1.00). "
+                f"{hab.regional_context}"
+            )
 
-        summary = (
-            f"Based on real-time satellite telemetry for {location.location_name}, "
-            f"{combined_reasoning} "
-            f"Observed SST is {sst.latest.value_c if sst and sst.latest else 'N/A'}°C, and "
-            f"Chlorophyll-a is {chlorophyll.latest.chlorophyll_mg_m3 if chlorophyll and chlorophyll.latest else 'N/A'} mg/m³."
-        )
+        else:
+            favourability_headline = f"Marine Intelligence Briefing: {location.location_name}"
+            combined_reasoning = (
+                f"Comprehensive evaluation for {location.location_name}: "
+                f"SST {sst.latest.value_c if sst and sst.latest else 'N/A'}°C, "
+                f"Chlorophyll-a {chlorophyll.latest.chlorophyll_mg_m3 if chlorophyll and chlorophyll.latest else 'N/A'} mg/m³, "
+                f"HAB Signal {classification}."
+            )
+            summary = (
+                f"Synthesizing multi-agent oceanographic telemetry for {location.location_name}: "
+                f"Observed SST is {sst.latest.value_c if sst and sst.latest else 'N/A'}°C "
+                f"({sst.anomaly.value_c:+.2f}°C anomaly relative to NOAA 1971-2000 baseline) with a {sst.trend.direction if sst else 'stable'} trajectory. "
+                f"Near-surface Chlorophyll-a is {chlorophyll.latest.chlorophyll_mg_m3 if chlorophyll and chlorophyll.latest else 'N/A'} mg/m³ "
+                f"({chlorophyll.baseline_comparison.relative_status if chlorophyll else 'baseline'} relative status). "
+                f"Ecological synthesis evaluates an overall {classification} environmental favourability signal ({int(hab_score * 100)}/100)."
+            )
 
         uncertainties = [
             "Thermal and optical satellite sensors sample the immediate sea surface and do not detect subsurface thin layers or internal waves.",
