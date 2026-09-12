@@ -370,11 +370,29 @@ export function executeClientORCAPipeline(
   const has_hab_q = /bloom|hab|red tide|favour|favor|toxicity|domoic|risk|harmful/.test(q);
   const has_adv_q = /advisory|fisheries|closure|quarantine|warning|safe|fish|eat|swim/.test(q);
 
+  // Strict Domain Relevance Filter: Only answer relevant marine questions
+  const marineKeywords = [
+    "sst", "temperature", "temp", "sea", "ocean", "water", "marine", "coastal", "coast",
+    "shore", "shelf", "bay", "basin", "gulf", "channel", "upwelling", "chlorophyll",
+    "chl", "chla", "algae", "algal", "bloom", "hab", "red tide", "biomass", "phytoplankton",
+    "biotoxin", "domoic", "psp", "saxitoxin", "advisory", "fisheries", "fishery", "fish",
+    "closure", "quarantine", "stratification", "pycnocline", "monsoon", "salinity",
+    "current", "isotherm", "satellite", "noaa", "oisst", "copernicus", "viirs", "dineof",
+    "california", "kerala", "mumbai", "arabian", "bengal", "pacific", "atlantic", "indian",
+    "monterey", "san francisco", "kochi", "cochin", "malabar", "konkan", "latitude", "longitude"
+  ];
+  const isMarineRelevant = marineKeywords.some((k) => q.includes(k));
+
   let favourability_headline = `Environmental Favourability: ${habClass}`;
   let natural_language_summary = "";
   let combined_reasoning = "";
 
-  if (has_sst_q && !has_chl_q && !has_hab_q && !has_adv_q) {
+  if (!isMarineRelevant) {
+    // Out of domain rejection
+    favourability_headline = "Inquiry Out of Domain · Marine Scope Enforced";
+    natural_language_summary = "I am ORCA, a specialized Marine Intelligence and Oceanographic Assistant. I am designed specifically to evaluate real-time sea surface temperature (SST), Copernicus satellite chlorophyll-a ocean colour, coastal health advisories, and harmful algal bloom (HAB) environmental favourability. Your inquiry is outside this domain. Please submit an oceanographic, marine, or coastal inquiry.";
+    combined_reasoning = "System scope is restricted to marine, oceanographic, and coastal intelligence.";
+  } else if (has_sst_q && !has_chl_q && !has_hab_q && !has_adv_q) {
     // Focused Sea Surface Temperature Answer
     favourability_headline = `SST Analysis: ${reg.sst_val}°C (${reg.sst_direction} at +${reg.sst_slope}°C/day)`;
     natural_language_summary = `In response to your inquiry regarding sea-surface temperature for ${reg.name}: Real-time NOAA OISST v2.1 observations report a current sea-surface temperature of ${reg.sst_val}°C. This represents a ${reg.sst_anom >= 0 ? "+" : ""}${reg.sst_anom}°C thermal anomaly relative to the NOAA 1971–2000 climatological baseline. The 7-day linear regression indicates an active ${reg.sst_direction} trajectory with a linear slope of +${reg.sst_slope}°C/day, indicating ${reg.sst_slope > 0.03 ? "marked thermal stratification" : "a stable thermal regime"} along the ${reg.coastal_zone}.`;

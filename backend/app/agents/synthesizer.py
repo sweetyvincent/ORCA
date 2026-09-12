@@ -19,8 +19,48 @@ class SynthesizerAgent:
     """
     Synthesizes structured evidence into a transparent, scientifically-grounded narrative.
     Strictly separates observed measurements from derived inferences and states limitations.
-    Uses Anthropic Claude API when configured, with high-fidelity deterministic fallback.
+    Uses Google Gemini API when configured, with high-fidelity deterministic fallback.
     """
+
+    def _is_marine_relevant(self, question: str) -> bool:
+        """Check if the inquiry is relevant to oceanographic, marine, coastal, or environmental topics."""
+        q = question.lower().strip()
+        if not q:
+            return True
+        
+        marine_keywords = [
+            "sst", "temperature", "temp", "sea", "ocean", "water", "marine", "coastal", "coast",
+            "shore", "shelf", "bay", "basin", "gulf", "channel", "upwelling", "chlorophyll",
+            "chl", "chla", "algae", "algal", "bloom", "hab", "red tide", "biomass", "phytoplankton",
+            "biotoxin", "domoic", "psp", "saxitoxin", "advisory", "fisheries", "fishery", "fish",
+            "closure", "quarantine", "stratification", "pycnocline", "monsoon", "salinity",
+            "current", "isotherm", "satellite", "noaa", "oisst", "copernicus", "viirs", "dineof",
+            "california", "kerala", "mumbai", "arabian", "bengal", "pacific", "atlantic", "indian",
+            "monterey", "san francisco", "kochi", "cochin", "malabar", "konkan", "latitude", "longitude"
+        ]
+        return any(k in q for k in marine_keywords)
+
+    def _out_of_scope_response(self, question: str, now_str: str) -> SynthesisResult:
+        """Politely reject non-marine inquiries to ensure ORCA only provides relevant marine intelligence."""
+        return SynthesisResult(
+            natural_language_summary=(
+                "I am ORCA, a specialized Marine Intelligence and Oceanographic Assistant. "
+                "I am designed specifically to evaluate real-time sea surface temperature (SST), "
+                "Copernicus satellite chlorophyll-a ocean colour, coastal health advisories, "
+                "and harmful algal bloom (HAB) environmental favourability. "
+                "Your inquiry appears outside this domain. Please submit an oceanographic, marine, or coastal inquiry."
+            ),
+            favourability_headline="Inquiry Out of Domain · Marine Scope Enforced",
+            sst_findings=None,
+            chlorophyll_findings=None,
+            advisory_findings=None,
+            combined_reasoning="Inquiry is outside the operational scope of ORCA. Only marine, oceanographic, and coastal queries are processed.",
+            scientific_uncertainties=[
+                "System scope is strictly restricted to oceanographic and marine environmental intelligence."
+            ],
+            citations=[],
+            generated_at=now_str
+        )
 
     async def synthesize(
         self,
@@ -33,7 +73,26 @@ class SynthesizerAgent:
     ) -> SynthesisResult:
         now_str = datetime.now(IST).strftime("%Y-%m-%dT%H:%M:%S+05:30")
         
-        # Check if Claude API key is configured
+        # 1. Strict Domain Relevance Check: Only answer relevant marine questions
+        if not self._is_marine_relevant(question):
+            return self._out_of_scope_response(question, now_str)
+
+        # 2. Check if Google Gemini API key is configured
+        if settings.GEMINI_API_KEY:
+            try:
+                return await self._call_gemini(
+                    question=question,
+                    location=location,
+                    sst=sst,
+                    chlorophyll=chlorophyll,
+                    advisory=advisory,
+                    hab=hab,
+                    now_str=now_str
+                )
+            except Exception as e:
+                print(f"[SYNTHESIZER] Gemini API error ({e}), trying fallback.")
+
+        # 3. Check if Claude API key is configured
         if settings.ANTHROPIC_API_KEY:
             try:
                 return await self._call_claude(
@@ -57,6 +116,106 @@ class SynthesizerAgent:
             hab=hab,
             now_str=now_str
         )
+
+    async def _call_gemini(
+        self,
+        question: str,
+        location: LocationResolved,
+        sst: Optional[SSTResult],
+        chlorophyll: Optional[ChlorophyllResult],
+        advisory: Optional[AdvisoryResult],
+        hab: Optional[HABAssessment],
+        now_str: str
+    ) -> SynthesisResult:
+        import httpx
+
+        evidence_payload = {
+            "location": location.model_dump(),
+            "sst_evidence": sst.model_dump() if sst else None,
+            "chlorophyll_evidence": chlorophyll.model_dump() if chlorophyll else None,
+            "advisory_evidence": advisory.model_dump() if advisory else None,
+            "deterministic_hab_classification": hab.model_dump() if hab else None
+        }
+
+        system_instruction = """You are ORCA, an advanced Marine Intelligence and Oceanographic Assistant powered by Google Gemini.
+Your task is to synthesize oceanographic specialist evidence into a transparent, scientifically-grounded, cautious assessment.
+
+NON-NEGOTIABLE RELEVANCE & SCIENTIFIC RULES:
+1. ONLY answer questions relevant to oceanography, marine ecosystems, sea surface temperature, chlorophyll biomass, harmful algal blooms, and coastal notices.
+2. Ground every statement strictly in the provided JSON evidence. NEVER invent numbers or measurements.
+3. Explicitly cite which specialist agent supplied each finding (e.g. NOAA OISST v2.1, Copernicus VIIRS DINEOF, Coastal Advisory Specialist).
+4. Clearly distinguish OBSERVED DATA (raw measurements) from DERIVED SIGNALS (trends, anomalies) and INFERENCE.
+5. If HAB favourability is evaluated, state clearly: "This is an environmental favourability signal, not a confirmed HAB forecast."
+6. If the question is off-topic, decline politely.
+7. Return ONLY a valid JSON object matching the requested schema with no markdown fences.
+"""
+
+        user_content = f"""User Question: {question}
+
+Retrieved Specialist Telemetry:
+{json.dumps(evidence_payload, indent=2)}
+
+Respond with a JSON object having the following keys:
+- "natural_language_summary": A detailed, professional scientific summary answering the user's question directly.
+- "favourability_headline": Short uppercase headline summarizing findings (e.g. "SST Analysis: 27.2°C (cooling at -0.12°C/day)" or "Harmful Algal Bloom Favourability: ELEVATED (60/100)")
+- "sst_findings": String summarizing the SST findings or null
+- "chlorophyll_findings": String summarizing the Chlorophyll findings or null
+- "advisory_findings": String summarizing the coastal advisory findings or null
+- "combined_reasoning": String detailing the interaction between physical and biological factors
+- "scientific_uncertainties": List of critical unknown factors (e.g. subsurface pycnocline depth, taxonomic verification needed)
+- "citations": List of citation objects with "name", "provider", "dataset", "timestamp"
+"""
+
+        models_to_try = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest"]
+        last_err = None
+
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            for model_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
+                try:
+                    payload = {
+                        "contents": [
+                            {"parts": [{"text": f"{system_instruction}\n\n{user_content}"}]}
+                        ],
+                        "generationConfig": {
+                            "response_mime_type": "application/json",
+                            "temperature": 0.2
+                        }
+                    }
+                    r = await client.post(url, json=payload)
+                    if r.status_code == 200:
+                        raw_text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        if raw_text.startswith("```json"):
+                            raw_text = raw_text[7:]
+                        if raw_text.endswith("```"):
+                            raw_text = raw_text[:-3]
+                        parsed = json.loads(raw_text.strip())
+                        
+                        return SynthesisResult(
+                            natural_language_summary=parsed.get("natural_language_summary", ""),
+                            favourability_headline=parsed.get("favourability_headline", f"Marine Telemetry: {hab.classification if hab else 'ASSESSED'}"),
+                            sst_findings=parsed.get("sst_findings"),
+                            chlorophyll_findings=parsed.get("chlorophyll_findings"),
+                            advisory_findings=parsed.get("advisory_findings"),
+                            combined_reasoning=parsed.get("combined_reasoning", ""),
+                            scientific_uncertainties=parsed.get("scientific_uncertainties", [
+                                "Surface satellite observations sample upper layer; subsurface thin layers require CTD cast validation.",
+                                "Optical pigment measurement cannot differentiate toxic Pseudo-nitzschia from benign diatoms without cell counts."
+                            ]),
+                            citations=parsed.get("citations") or (
+                                (sst.citations if sst and sst.citations else []) +
+                                (chlorophyll.citations if chlorophyll and chlorophyll.citations else []) +
+                                (advisory.citations if advisory and advisory.citations else [])
+                            ),
+                            generated_at=now_str
+                        )
+                    else:
+                        last_err = f"Status {r.status_code}: {r.text[:150]}"
+                except Exception as e:
+                    last_err = str(e)
+                    continue
+
+        raise Exception(f"All Gemini models failed. Last error: {last_err}")
 
     async def _call_claude(
         self,
