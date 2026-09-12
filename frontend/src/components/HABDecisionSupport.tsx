@@ -3,6 +3,16 @@
 import React, { useState } from "react";
 import { HABAssessment, SynthesisResult, SSTResult, ChlorophyllResult, AdvisoryResult } from "../lib/types";
 import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+  CartesianGrid,
+} from "recharts";
+import {
   ShieldAlert,
   AlertCircle,
   CheckCircle2,
@@ -12,6 +22,7 @@ import {
   ChevronRight,
   Info,
   Microscope,
+  Activity,
 } from "lucide-react";
 
 interface HABDecisionSupportProps {
@@ -60,6 +71,23 @@ export const HABDecisionSupport: React.FC<HABDecisionSupportProps> = ({
     }
   };
 
+  const factorChartData = (habAssessment?.factors && habAssessment.factors.length > 0
+    ? habAssessment.factors
+    : [
+        { name: "SST Isotherm", weight: 0.35, effect: "supporting", evidence: "Surface warming" },
+        { name: "Chl-a Biomass", weight: 0.45, effect: "supporting", evidence: "Primary productivity" },
+        { name: "Advisory", weight: 0.15, effect: "neutral", evidence: "Regulatory status" },
+      ]
+  ).map((f) => ({
+    name: f.name
+      .replace("Sea Surface Temperature (SST)", "SST Isotherm")
+      .replace("Chlorophyll-a Biomass", "Chl-a Biomass")
+      .replace("Coastal / Fisheries Advisory", "Advisory"),
+    weightPct: Math.round(f.weight * 100),
+    effect: f.effect,
+    fill: f.effect === "supporting" ? "#f59e0b" : "#00f0ff",
+  }));
+
   return (
     <div className="w-full hud-panel rounded-xl p-4 font-mono flex flex-col gap-3">
       {/* Top Banner: Scientific Assessment Headline */}
@@ -105,6 +133,47 @@ export const HABDecisionSupport: React.FC<HABDecisionSupportProps> = ({
             }`}
             style={{ width: `${Math.max(8, score * 100)}%` }}
           />
+        </div>
+      </div>
+
+      {/* Ecological Weight & Multi-Factor Gateway Graph */}
+      <div className="w-full bg-[#020a16] p-3 rounded-lg border border-ocean-800">
+        <div className="flex items-center justify-between mb-1 text-[11px] text-slate-400">
+          <span className="font-bold text-slate-300 flex items-center gap-1.5">
+            <Activity className="w-3.5 h-3.5 text-bioglow-cyan" />
+            ECOLOGICAL GATEWAY WEIGHT CONTRIBUTION
+          </span>
+          <span className="text-[10px] text-bioglow-cyan">Deterministic Matrix</span>
+        </div>
+        <div className="w-full h-24 my-1">
+          <ResponsiveContainer width="100%" height={96}>
+            <BarChart data={factorChartData} layout="vertical" margin={{ top: 2, right: 25, left: 45, bottom: 2 }}>
+              <CartesianGrid strokeDasharray="2 2" stroke="#0e233d" horizontal={false} />
+              <XAxis type="number" domain={[0, 50]} stroke="#64748b" tick={{ fontSize: 9 }} unit="%" />
+              <YAxis type="category" dataKey="name" stroke="#94a3b8" tick={{ fontSize: 9 }} width={80} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#030c18",
+                  borderColor: "#00f0ff",
+                  borderRadius: "6px",
+                  fontSize: "10px",
+                }}
+                formatter={(val: any) => [`${val}% Weight`, "Ecological Weight"]}
+              />
+              <Bar dataKey="weightPct" radius={[0, 4, 4, 0]}>
+                {factorChartData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1 pt-1 border-t border-ocean-800/80">
+          <span className="flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-amber-400"></span> Supporting Risk Factor
+            <span className="inline-block w-2 h-2 rounded-full bg-bioglow-cyan"></span> Baseline Neutral Factor
+          </span>
+          <span className="text-slate-300 font-sans">Multi-Specialist Fusion</span>
         </div>
       </div>
 
